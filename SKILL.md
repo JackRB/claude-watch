@@ -12,7 +12,7 @@ user-invocable: true
 
 # /watch — Claude watches a video
 
-You don't have a video input; this skill gives you one. A Python script downloads the video, extracts frames as JPEGs (one per detected shot via scene-change), gets a timestamped transcript (native captions first, then Whisper API as fallback), runs editorial pacing metrics, and microscopes the first 10 seconds at higher density. You then `Read` each frame path to see the images, combine them with the transcript to answer the user, fill the structured `report.md`, and offer to ingest the analysis into Taoufik's Second Brain.
+You don't have a video input; this skill gives you one. A Python script downloads the video, extracts frames as JPEGs (one per detected shot via scene-change), gets a timestamped transcript (native captions first, then local Whisper, then the Whisper APIs), runs editorial pacing metrics, and microscopes the first 10 seconds at higher density. You then `Read` each frame path to see the images, combine them with the transcript to answer the user, fill the structured `report.md`, and offer to ingest the analysis into Taoufik's Second Brain.
 
 ## What v2 does differently
 
@@ -22,28 +22,31 @@ You don't have a video input; this skill gives you one. A Python script download
 - **Structured `report.md`** — every watch emits an ingest-shaped report at `<workdir>/report.md` with TL;DR, key moments, hook breakdown, editorial profile, quotable moments, entities, concepts, and transcript. Narrative sections are emitted as `<!-- pending Claude fill: ... -->` markers — you fill them in before offering ingest.
 - **Step 4.5 — Ingest gate** — after answering the user, you ask once: "Want to ingest this into your Obsidian vault?" If yes, and a vault is detected, you read `$VAULT_DIR/CLAUDE.md` (if it exists) and run that vault's Ingest op against the report.
 
-None of the above add new dependencies — pure ffmpeg + stdlib + the existing Whisper backend.
+None of the above add new dependencies — pure ffmpeg + stdlib + the existing Whisper backends. The local Whisper backend is the one optional dependency (`pip install faster-whisper`); without it the skill behaves exactly as before.
 
 ## Configuration — finding the user's Obsidian vault
 
 Steps 4.4 and 4.5 stage the report inside an Obsidian vault so the user can read it where they read everything else. Resolve the vault directory in this order — first hit wins, and the result is what `$VAULT_DIR` refers to everywhere below:
 
 1. **`$WATCH_VAULT_DIR` env var** — if set and the path exists, use it. This is the user-controlled override.
-2. **`~/Second brain/`** — if it exists as a directory.
-3. **`~/Documents/Obsidian/`** — if it exists as a directory.
-4. **`~/Obsidian/`** — if it exists as a directory.
-5. **None found** — skip Steps 4.4 and 4.5 entirely. Print one line in chat so the user knows what happened: `📄 Report (no vault detected): <workdir>/report.md`. Suggest they set `WATCH_VAULT_DIR` if they want auto-ingest.
+2. **`~/My Drive/Obsidian/Jack/`** — Jack's vault. This is the default for this setup; reports land in its `Projects/<Project>/Video Analysis/` folder.
+3. **`~/Second brain/`** — if it exists as a directory.
+4. **`~/Documents/Obsidian/`** — if it exists as a directory.
+5. **`~/Obsidian/`** — if it exists as a directory.
+6. **None found** — skip Steps 4.4 and 4.5 entirely. Print one line in chat so the user knows what happened: `📄 Report (no vault detected): <workdir>/report.md`. Suggest they set `WATCH_VAULT_DIR` if they want auto-ingest.
 
 A quick way to resolve it in bash inside the skill:
 
 ```bash
 VAULT_DIR="${WATCH_VAULT_DIR:-}"
 if [ -z "$VAULT_DIR" ] || [ ! -d "$VAULT_DIR" ]; then
-  for candidate in "$HOME/Second brain" "$HOME/Documents/Obsidian" "$HOME/Obsidian"; do
+  for candidate in "$HOME/My Drive/Obsidian/Jack" "$HOME/Second brain" "$HOME/Documents/Obsidian" "$HOME/Obsidian"; do
     if [ -d "$candidate" ]; then VAULT_DIR="$candidate"; break; fi
   done
 fi
 ```
+
+Reports stage into **`Projects/<Project>/Video Analysis/<slug>/`** inside the resolved vault, where `<Project>` is the existing project folder the video's *subject* belongs to — never a top-level format folder. Step 4.4 covers how to pick it.
 
 The vault's URL-name (for the `obsidian://` URL scheme in Step 4.4) is the final path component — e.g. `$HOME/Second brain` → `Second brain`. URL-encode spaces as `%20`.
 
@@ -64,7 +67,7 @@ On non-zero exit, follow the table:
 | Exit | Meaning | Action |
 |------|---------|--------|
 | `2` | Missing binaries (`ffmpeg` / `ffprobe` / `yt-dlp`) | Run installer |
-| `3` | No Whisper API key | Run installer to scaffold `.env`, then ask user for a key |
+| `3` | No transcription backend | `pip install faster-whisper` (free, local), or run installer and ask user for a key |
 | `4` | Both missing | Run installer, then ask for a key |
 
 The installer is idempotent — safe to re-run:
@@ -75,7 +78,7 @@ python3 "${CLAUDE_SKILL_DIR}/scripts/setup.py"
 
 On macOS with Homebrew, it auto-installs `ffmpeg` and `yt-dlp`. On Linux/Windows, it prints the exact install commands for the user to run. It scaffolds `~/.config/watch/.env` with commented placeholders at `0600` perms, and writes `SETUP_COMPLETE=true` once deps + a key are in place so the next session knows this user has already been through the wizard.
 
-**If an API key is still missing after install:** use `AskUserQuestion` to ask the user whether they have a Groq API key (preferred — cheaper, faster) or an OpenAI key. Then write it into `~/.config/watch/.env` — set the matching `GROQ_API_KEY=...` or `OPENAI_API_KEY=...` line. If they don't want to set up Whisper, proceed with `--no-whisper` and tell them videos without native captions will come back frames-only.
+**If no transcription backend is available after install:** the cheapest fix is local — `pip install faster-whisper` needs no key and never uploads the audio. Suggest that first; a CUDA GPU runs whisper-large-v3 many times faster than realtime, and CPU works but is slow. Otherwise use `AskUserQuestion` to ask whether the user has a Groq key (cheaper, faster than OpenAI) or an OpenAI key, and write it into `~/.config/watch/.env` as `GROQ_API_KEY=...` or `OPENAI_API_KEY=...`. If they want neither, proceed with `--no-whisper` and tell them videos without native captions will come back frames-only.
 
 **Structured mode (optional):** `python3 "${CLAUDE_SKILL_DIR}/scripts/setup.py" --json` emits `{status, first_run, missing_binaries, whisper_backend, has_api_key, config_file, platform}` where `status` is one of `ready | needs_install | needs_key | needs_install_and_key`. Use this when you need to branch on specifics (e.g. "is this the user's very first run?" → `first_run: true`).
 
@@ -116,7 +119,7 @@ Optional flags:
 - `--resolution W` — change frame width in px (default 512; bump to 1024 only if the user needs to read on-screen text)
 - `--fps F` — override auto-fps (clamped to 2 fps max). Setting `--fps` disables scene-change sampling.
 - `--out-dir DIR` — keep working files somewhere specific (default: an auto-generated tmp dir)
-- `--whisper groq|openai` — force a specific Whisper backend (default: prefer Groq if both keys exist)
+- `--whisper local|groq|openai` — force a specific Whisper backend (default: local if faster-whisper is installed, else Groq, else OpenAI)
 - `--no-whisper` — disable the Whisper fallback entirely (frames-only if no captions)
 - `--no-scene-change` — force uniform frame sampling (debug only; usually leave on)
 - `--no-hook-microscope` — skip the 0-10s dense pass (saves ~1 Whisper call)
@@ -174,46 +177,47 @@ The fully-filled `report.md` is what gets ingested at Step 4.5. Do not skip the 
 
 When `$VAULT_DIR` resolves:
 
-1. **Derive the slug now** (do not wait for Step 4.5). Take the video title from `report.md` frontmatter, slugify (lowercase, ASCII-only, hyphens, max 60 chars), append `-YYYY-MM-DD`. Example: `karpathy-claude-md-43k-installs-2026-05-24`.
-2. **Create the staging dir:** `mkdir -p "$VAULT_DIR/raw/watched/<slug>"`.
-3. **Copy `report.md` + every hero frame** (filenames in the report frontmatter under `hero_frames:`) into that dir. The report MUST live inside the vault for Obsidian to open it.
-4. **Open in Obsidian via URL scheme** (macOS). The vault URL-name is the final component of `$VAULT_DIR` with spaces URL-encoded as `%20`:
-   ```bash
-   VAULT_NAME=$(basename "$VAULT_DIR" | sed 's/ /%20/g')
-   open "obsidian://open?vault=${VAULT_NAME}&file=raw/watched/<slug>/report.md"
+1. **Pick `<Project>` — the report is filed by what it's *about*, not by the fact that it's a video.** There is deliberately no top-level `Projects/Video Analysis/` folder; a video about Medicare is a Retirement source, a video about Obsidian is a Build a Second Brain source. List `$VAULT_DIR/Projects/` and choose the folder whose subject matches the video's content and the user's `--intent`. If nothing fits, ask the user rather than inventing a folder. *(This mirrors the "Format is not a topic" rule in Jack's vault `CLAUDE.md` — if that file states a different convention, it wins.)*
+2. **Derive the slug now** (do not wait for Step 4.5). Take the video title from `report.md` frontmatter, slugify (lowercase, ASCII-only, hyphens, max 60 chars), append `-YYYY-MM-DD`. Example: `karpathy-claude-md-43k-installs-2026-05-24`.
+3. **Create the staging dir:** `mkdir -p "$VAULT_DIR/Projects/<Project>/Video Analysis/<slug>"`.
+4. **Copy `report.md` + every hero frame** (filenames in the report frontmatter under `hero_frames:`) into that dir. The report MUST live inside the vault for Obsidian to open it.
+5. **Open in Obsidian via URL scheme** (Windows). The vault URL-name is the final component of `$VAULT_DIR` with spaces URL-encoded as `%20`. Use PowerShell's `Start-Process` to hand the `obsidian://` URL to the OS handler:
+   ```powershell
+   $VaultName = (Split-Path "$VaultDir" -Leaf) -replace ' ', '%20'
+   Start-Process "obsidian://open?vault=$VaultName&file=Projects/<Project>/Video%20Analysis/<slug>/report.md"
    ```
-   The `file=` value is the path relative to the vault root, no leading slash. Don't ask permission — the user has already opted in by running /watch.
-5. **Echo the vault-relative path in chat** on its own line: `📄 Report (open in Obsidian): raw/watched/<slug>/report.md`. So if Obsidian was closed / the URL handler missed, the user can still navigate to it manually inside the vault.
+   The `file=` value is the path relative to the vault root, no leading slash, with spaces URL-encoded as `%20`. Don't ask permission — the user has already opted in by running /watch.
+6. **Echo the vault-relative path in chat** on its own line: `📄 Report (open in Obsidian): Projects/<Project>/Video Analysis/<slug>/report.md`. So if Obsidian was closed / the URL handler missed, the user can still navigate to it manually inside the vault.
 
 Rationale: the report is the leverage point of /watch. If the user reads everything in Obsidian, opening in Preview or VS Code defeats the purpose. Staging at 4.4 also means Step 4.5's "Yes / Stage" branches are no-ops on the copy step (the file is already in the vault); they only differ in whether the Ingest op runs.
 
-**Cleanup implication for Step 4.5:** if the user picks "No, drop it" at 4.5 AND a vault was staged at 4.4, ALSO `rm -rf "$VAULT_DIR/raw/watched/<slug>"` since we pre-staged. Do NOT drop the vault copy if they picked Yes or Stage.
+**Cleanup implication for Step 4.5:** if the user picks "No, drop it" at 4.5 AND a vault was staged at 4.4, ALSO `rm -rf "$VAULT_DIR/Projects/<Project>/Video Analysis/<slug>"` since we pre-staged. Do NOT drop the vault copy if they picked Yes or Stage.
 
 **Step 4.5 — Offer ingest into the Obsidian vault.** **Skip this step entirely if no vault was detected at Step 4.4.** Otherwise use `AskUserQuestion` once, with these options (do NOT skip if a vault was found unless the user explicitly said "don't ingest" before /watch ran):
 
 > **Question:** "Want to ingest this into your Obsidian vault?"
 > - **Yes — same angle** ("<intent>")
 > - **Yes — different angle** (user specifies in the notes field)
-> - **Stage to `raw/watched/` for later**
+> - **Stage to `Projects/<Project>/Video Analysis/` for later**
 > - **No, drop it**
 
 Routing based on response:
 
 **A. Yes (same or different angle):**
 1. Derive the slug: take the video title from `report.md` frontmatter, slugify (lowercase, ASCII-only, hyphens, max 60 chars), append `-YYYY-MM-DD`. Example: `me-at-the-zoo-2026-05-24`.
-2. Confirm the staging dir exists at `$VAULT_DIR/raw/watched/<slug>/` (Step 4.4 already created it).
+2. Confirm the staging dir exists at `$VAULT_DIR/Projects/<Project>/Video Analysis/<slug>/` (Step 4.4 already created it).
 3. The report + hero frames are already copied there from Step 4.4.
 4. **If "different angle":** Re-edit the TL;DR + Entities + Concepts sections of the copied report to reflect the new angle the user specified, before running ingest.
-5. **If `$VAULT_DIR/CLAUDE.md` exists:** Read it to refresh the Ingest op definition — that file is authoritative; this skill must not duplicate its steps. Execute the Ingest op against `raw/watched/<slug>/report.md` exactly as `$VAULT_DIR/CLAUDE.md` defines it.
-6. **If no `$VAULT_DIR/CLAUDE.md` exists:** Run a generic ingest — read the report, identify entities + concepts, append a one-line entry to `$VAULT_DIR/log.md` (create if missing), and tell the user the report is staged at `raw/watched/<slug>/report.md` and they can wire up an Ingest op of their own.
+5. **If `$VAULT_DIR/CLAUDE.md` exists:** Read it to refresh the Ingest op definition — that file is authoritative; this skill must not duplicate its steps. Execute the Ingest op against `Projects/<Project>/Video Analysis/<slug>/report.md` exactly as `$VAULT_DIR/CLAUDE.md` defines it.
+6. **If no `$VAULT_DIR/CLAUDE.md` exists:** Run a generic ingest — read the report, identify entities + concepts, append a one-line entry to `$VAULT_DIR/log.md` (create if missing), and tell the user the report is staged at `Projects/<Project>/Video Analysis/<slug>/report.md` and they can wire up an Ingest op of their own.
 7. Report back to the user in chat: which entity pages were touched (if any), the path to the staged report, and the `log.md` entry written.
 
-**B. Stage to `raw/watched/` for later:**
+**B. Stage to `Projects/<Project>/Video Analysis/` for later:**
 1. The staging from Step 4.4 already did the file copy.
 2. Do NOT touch the wiki. Do NOT append to `log.md`.
-3. Tell the user in chat: "Staged at `$(basename $VAULT_DIR)/raw/watched/<slug>/`. Run an Ingest op against it when you're ready."
+3. Tell the user in chat: "Staged at `$(basename $VAULT_DIR)/Projects/<Project>/Video Analysis/<slug>/`. Run an Ingest op against it when you're ready."
 
-**C. No, drop it:** proceed to Step 5 (cleanup) — and per the cleanup-implication note in Step 4.4, `rm -rf "$VAULT_DIR/raw/watched/<slug>"` to undo the pre-staging.
+**C. No, drop it:** proceed to Step 5 (cleanup) — and per the cleanup-implication note in Step 4.4, `rm -rf "$VAULT_DIR/Projects/<Project>/Video Analysis/<slug>"` to undo the pre-staging.
 
 The "different angle" path is what makes /watch truly plug-and-play — the user can watch a video for one reason, then on the way out decide it's actually more useful for a different concept, and the resulting wiki entry reframes accordingly.
 
@@ -221,24 +225,28 @@ The "different angle" path is what makes /watch truly plug-and-play — the user
 
 ## Transcription
 
-The script gets a timestamped transcript in one of two ways:
+The script gets a timestamped transcript in one of three ways, in this order:
 
 1. **Native captions (free, preferred).** yt-dlp pulls manual or auto-generated subtitles from the source platform if available.
-2. **Whisper API fallback.** If no captions came back (or the source is a local file), the script extracts audio (`ffmpeg -vn -ac 1 -ar 16000 -b:a 64k`, ~0.5 MB/min) and uploads it to whichever Whisper API has a key configured:
-   - **Groq** — `whisper-large-v3`. Preferred default: cheaper, faster. Get a key at console.groq.com/keys.
+2. **Local Whisper (free, no key, no upload).** When `faster-whisper` is installed, the script extracts audio and transcribes it on this machine with `whisper-large-v3`. On a CUDA GPU that is many times faster than realtime — a 54-minute podcast takes a few minutes; the first run downloads the ~3 GB model into the HuggingFace cache. CPU works but is slow, so drop to a smaller model there.
+3. **Whisper API fallback.** With no local install, the script extracts audio (`ffmpeg -vn -ac 1 -ar 16000 -b:a 64k`, ~0.5 MB/min) and uploads it to whichever Whisper API has a key configured:
+   - **Groq** — `whisper-large-v3`. Cheaper and faster than OpenAI. Get a key at console.groq.com/keys.
    - **OpenAI** — `whisper-1`. Fallback. Get a key at platform.openai.com/api-keys.
 
-Both keys live in `~/.config/watch/.env`. The script prefers Groq when both are set; override with `--whisper openai` to force OpenAI. Use `--no-whisper` to skip the fallback entirely.
+Local wins whenever it is installed, because it costs nothing and the audio never leaves the machine. Force a backend with `--whisper local|groq|openai`; API keys live in `~/.config/watch/.env`. Use `--no-whisper` to skip the fallback entirely.
+
+Local backend knobs (env vars): `WATCH_LOCAL_MODEL` picks the model size (default `large-v3`; try `small` or `medium` on CPU-only machines) and `WATCH_LOCAL_DEVICE` forces `cuda` or `cpu`.
 
 ## Failure modes and handling
 
-- **Setup preflight failed** → run `python3 "${CLAUDE_SKILL_DIR}/scripts/setup.py"` (auto-installs ffmpeg/yt-dlp via brew on macOS, scaffolds the `.env`). For API key, ask the user via `AskUserQuestion` and write it to `~/.config/watch/.env`.
-- **No transcript available** → captions missing AND (no Whisper key OR Whisper API failed). Script prints a hint pointing to setup. Proceed frames-only and tell the user.
+- **Setup preflight failed** → run `python3 "${CLAUDE_SKILL_DIR}/scripts/setup.py"` (auto-installs ffmpeg/yt-dlp via brew on macOS, scaffolds the `.env`). For transcription, suggest `pip install faster-whisper` first; for an API key, ask the user via `AskUserQuestion` and write it to `~/.config/watch/.env`.
+- **No transcript available** → captions missing AND no backend worked (faster-whisper not installed, no API key, or the call failed). Script prints a hint pointing to setup. Proceed frames-only and tell the user.
 - **Long video warning printed** → acknowledge it in your answer. Offer to re-run focused on a specific section via `--start`/`--end` rather than a sparse full-video scan.
 - **Download fails** → yt-dlp's error goes to stderr. If it's a login-required or region-locked video, tell the user plainly; do not keep retrying.
-- **Whisper request fails** → the error is printed to stderr (likely: invalid key, rate limit, or 25 MB upload limit on a very long video). The report will say "none available" for transcript. You can retry with `--whisper openai` if Groq failed (or vice versa).
+- **Whisper request fails** → the error is printed to stderr (likely: invalid key, rate limit, or 25 MB upload limit on a very long video). The report will say "none available" for transcript. You can retry with `--whisper openai` if Groq failed (or vice versa), or `--whisper local` if faster-whisper is installed — local has no upload limit, so it is the right retry for a long file.
+- **Local Whisper fails** → usually a CUDA library problem (`Library cublas64_12.dll is not found` or similar). Retry with `WATCH_LOCAL_DEVICE=cpu` and a smaller `WATCH_LOCAL_MODEL`, or fall back to an API backend. The CUDA libraries come from the `nvidia-cublas-cu12` and `nvidia-cudnn-cu12` pip packages.
 - **Report has unfilled `<!-- pending Claude fill: ... -->` markers** → you skipped Step 4. Go back, read the report, fill every marker via Edit, then offer ingest. Never ingest a half-filled report — the Second Brain Ingest op will produce sparse/wrong entity pages.
-- **Ingest fails partway** → do not roll back. The Second Brain Ingest op is idempotent on re-run (it updates existing pages rather than duplicating). Tell the user what failed, leave the staged artifact in `raw/watched/<slug>/`, and they can re-run by saying "ingest the staged report at `<slug>`".
+- **Ingest fails partway** → do not roll back. The Second Brain Ingest op is idempotent on re-run (it updates existing pages rather than duplicating). Tell the user what failed, leave the staged artifact in `Projects/<Project>/Video Analysis/<slug>/`, and they can re-run by saying "ingest the staged report at `<slug>`".
 
 ## Token efficiency
 
@@ -254,16 +262,17 @@ If you already watched a video this session and the user asks a follow-up, do **
 **What this skill does:**
 - Runs `yt-dlp` locally to download the video and pull native captions when the source supports them (public data; the request goes directly to whatever host the URL points at)
 - Runs `ffmpeg` / `ffprobe` locally to extract frames as JPEGs and, when Whisper is needed, a mono 16 kHz audio clip
+- Transcribes that audio clip **on this machine** when `faster-whisper` is installed — nothing is uploaded, and no key is used. The first local run downloads the model weights from HuggingFace into `~/.cache/huggingface`
 - Sends the extracted audio clip to Groq's Whisper API (`api.groq.com/openai/v1/audio/transcriptions`) when `GROQ_API_KEY` is set (preferred — cheaper, faster)
 - Sends the extracted audio clip to OpenAI's audio transcription API (`api.openai.com/v1/audio/transcriptions`) when `OPENAI_API_KEY` is set and Groq is not, or when `--whisper openai` is forced
 - Writes the downloaded video, frames, audio, and an intermediate transcript to a working directory under the system temp dir (or `--out-dir` if specified) so Claude can `Read` them
 - Reads / creates `~/.config/watch/.env` (mode `0600`) to store the Whisper API key(s) and a `SETUP_COMPLETE` marker. As a fallback, also reads `.env` in the current working directory
 - Reads `$VAULT_DIR/CLAUDE.md` at orchestration time (only when ingest is requested and the file exists) to follow that vault's Ingest operation definition
-- Writes a structured `report.md` plus copies of hero frames into `$VAULT_DIR/raw/watched/<slug>/` when a vault is detected at Step 4.4
+- Writes a structured `report.md` plus copies of hero frames into `$VAULT_DIR/Projects/<Project>/Video Analysis/<slug>/` when a vault is detected at Step 4.4
 - When ingest is consented to: reads and writes pages under `$VAULT_DIR/wiki/` (entities, concepts, sources, index.md) and appends to `$VAULT_DIR/log.md` — following the actions defined by the vault's Ingest op (or a generic fallback if no `CLAUDE.md` is present)
 
 **What this skill does NOT do:**
-- Does not upload the video itself to any API — only the extracted audio goes out, and only when native captions are missing AND Whisper is not disabled with `--no-whisper`
+- Does not upload the video itself to any API — only the extracted audio goes out, and only when native captions are missing AND the local backend is unavailable or overridden AND Whisper is not disabled with `--no-whisper`
 - Does not access any platform account (no login, no session cookies, no posting)
 - Does not share API keys between providers (Groq key only goes to `api.groq.com`, OpenAI key only goes to `api.openai.com`)
 - Does not log, cache, or write API keys to stdout, stderr, or output files
@@ -271,6 +280,6 @@ If you already watched a video this session and the user asks a follow-up, do **
 - Does not write to the Second Brain without explicit user consent at the Step 4.5 prompt
 - Does not silently overwrite wiki claims — contradictions surface as WARN flags per the Ingest op contract
 
-**Bundled scripts:** `scripts/watch.py` (entry point), `scripts/download.py` (yt-dlp wrapper), `scripts/frames.py` (ffmpeg uniform + scene-change extraction + hero selection), `scripts/pacing.py` (editorial metrics), `scripts/hook.py` (0-10s microscope), `scripts/report.py` (structured report emitter), `scripts/transcribe.py` (caption selection + Whisper orchestration), `scripts/whisper.py` (Groq / OpenAI clients, supports word-level timestamps), `scripts/setup.py` (preflight + installer)
+**Bundled scripts:** `scripts/watch.py` (entry point), `scripts/download.py` (yt-dlp wrapper), `scripts/frames.py` (ffmpeg uniform + scene-change extraction + hero selection), `scripts/pacing.py` (editorial metrics), `scripts/hook.py` (0-10s microscope), `scripts/report.py` (structured report emitter), `scripts/transcribe.py` (caption selection + Whisper orchestration), `scripts/whisper.py` (Groq / OpenAI clients + backend resolution, supports word-level timestamps), `scripts/local_whisper.py` (local faster-whisper backend), `scripts/setup.py` (preflight + installer)
 
 Review scripts before first use to verify behavior.
