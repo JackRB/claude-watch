@@ -19,7 +19,8 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR))
 
 from frames import extract  # noqa: E402
-from whisper import load_api_key, transcribe_audio  # noqa: E402
+from local_whisper import transcribe_audio_local  # noqa: E402
+from whisper import resolve_backend, transcribe_audio  # noqa: E402
 
 
 HOOK_DURATION_SECONDS = 10.0
@@ -48,10 +49,10 @@ def analyse_hook(
 
     words: list[dict] = []
     segments: list[dict] = []
-    if backend is None or api_key is None:
-        backend, api_key = load_api_key()
+    if backend is None:
+        backend, api_key = resolve_backend()
 
-    if backend and api_key:
+    if backend:
         try:
             if shutil.which("ffmpeg") is None:
                 raise SystemExit("ffmpeg required for hook microscope")
@@ -64,10 +65,13 @@ def analyse_hook(
                 "-t", str(HOOK_DURATION_SECONDS),
                 str(hook_audio.resolve()),
             ], check=True, capture_output=True)
-            segments, _, words = transcribe_audio(
-                hook_audio, backend=backend, api_key=api_key,
-                word_timestamps=True,
-            )
+            if backend == "local":
+                segments, words = transcribe_audio_local(hook_audio, word_timestamps=True)
+            else:
+                segments, _, words = transcribe_audio(
+                    hook_audio, backend=backend, api_key=api_key,
+                    word_timestamps=True,
+                )
         except SystemExit as exc:
             print(f"[hook] whisper failed: {exc}", file=sys.stderr)
         except subprocess.CalledProcessError as exc:

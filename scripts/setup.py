@@ -103,6 +103,17 @@ def _have_api_key() -> tuple[bool, str | None]:
     return False, None
 
 
+def _have_local_whisper() -> bool:
+    """faster-whisper installed = transcription works with no key at all."""
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    try:
+        from local_whisper import is_available
+
+        return is_available()
+    except Exception:
+        return False
+
+
 def is_first_run() -> bool:
     """True if the installer hasn't completed successfully yet."""
     return _read_env_key("SETUP_COMPLETE") != "true"
@@ -201,9 +212,16 @@ def _status() -> dict:
     missing = _check_binaries()
     has_key, backend = _have_api_key()
 
-    if not missing and has_key:
+    # Local faster-whisper needs no key, so it satisfies the transcription
+    # requirement on its own — and it is preferred when both are present.
+    has_local = _have_local_whisper()
+    if has_local:
+        backend = "local"
+    can_transcribe = has_key or has_local
+
+    if not missing and can_transcribe:
         status = "ready"
-    elif missing and not has_key:
+    elif missing and not can_transcribe:
         status = "needs_install_and_key"
     elif missing:
         status = "needs_install"
@@ -216,6 +234,7 @@ def _status() -> dict:
         "missing_binaries": missing,
         "whisper_backend": backend,
         "has_api_key": has_key,
+        "has_local_whisper": has_local,
         "config_file": str(CONFIG_FILE),
         "platform": platform.system(),
     }
@@ -237,8 +256,11 @@ def cmd_check() -> int:
     parts = []
     if s["missing_binaries"]:
         parts.append(f"missing binaries: {', '.join(s['missing_binaries'])}")
-    if not s["has_api_key"]:
-        parts.append("no Whisper API key (GROQ_API_KEY or OPENAI_API_KEY)")
+    if not s["has_api_key"] and not s["has_local_whisper"]:
+        parts.append(
+            "no transcription backend (pip install faster-whisper, "
+            "or set GROQ_API_KEY / OPENAI_API_KEY)"
+        )
     installer = Path(__file__).resolve()
     sys.stderr.write(
         f"[watch] setup incomplete ({'; '.join(parts)}). "
@@ -294,21 +316,26 @@ def cmd_install() -> int:
         print(f"[setup] config exists: {CONFIG_FILE}")
 
     has_key, backend = _have_api_key()
-    if has_key:
+    has_local = _have_local_whisper()
+    if has_local or has_key:
         _write_setup_complete()
-        print(f"[setup] ready. whisper backend: {backend}")
+        print(f"[setup] ready. whisper backend: {'local' if has_local else backend}")
         if installed_deps:
             print("[setup] installed dependencies; /watch is fully set up.")
         return 0
 
     print("")
-    print("[setup] one step left: add a Whisper API key.")
+    print("[setup] one step left: pick a transcription backend.")
     print("")
-    print(f"  Edit {CONFIG_FILE} and set either:")
-    print("    GROQ_API_KEY=...    (preferred — cheaper, faster; get one at console.groq.com/keys)")
+    print("  Local (free, no key, audio never leaves the machine):")
+    print("    pip install faster-whisper")
+    print("    A CUDA GPU runs it many times faster than realtime; CPU works but is slow.")
+    print("")
+    print(f"  Hosted — edit {CONFIG_FILE} and set either:")
+    print("    GROQ_API_KEY=...    (cheaper, faster; get one at console.groq.com/keys)")
     print("    OPENAI_API_KEY=...  (fallback; get one at platform.openai.com/api-keys)")
     print("")
-    print("  Without a key, /watch still works but videos without captions come back frames-only.")
+    print("  With neither, /watch still works but videos without captions come back frames-only.")
     return 3
 
 

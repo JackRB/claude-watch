@@ -36,7 +36,8 @@ from hook import analyse_hook  # noqa: E402
 from pacing import compute_pacing  # noqa: E402
 from report import write_report  # noqa: E402
 from transcribe import filter_range, format_transcript, parse_vtt  # noqa: E402
-from whisper import load_api_key, transcribe_video  # noqa: E402
+from local_whisper import describe as describe_local, transcribe_video_local  # noqa: E402
+from whisper import resolve_backend, transcribe_video  # noqa: E402
 
 
 def main() -> int:
@@ -58,9 +59,12 @@ def main() -> int:
     )
     ap.add_argument(
         "--whisper",
-        choices=["groq", "openai"],
+        choices=["local", "groq", "openai"],
         default=None,
-        help="Force a specific Whisper backend. Default: prefer Groq, fall back to OpenAI.",
+        help=(
+            "Force a specific Whisper backend. Default: prefer local faster-whisper "
+            "(free, no upload), then Groq, then OpenAI."
+        ),
     )
     ap.add_argument(
         "--intent",
@@ -173,7 +177,7 @@ def main() -> int:
         print("[watch] running hook microscope on first 10s…", file=sys.stderr)
         hook_backend, hook_key = (None, None)
         if not args.no_whisper:
-            hook_backend, hook_key = load_api_key(args.whisper)
+            hook_backend, hook_key = resolve_backend(args.whisper)
         hook_result = analyse_hook(
             video_path, work,
             backend=hook_backend, api_key=hook_key,
@@ -196,8 +200,16 @@ def main() -> int:
             print(f"[watch] subtitle parse failed: {exc}", file=sys.stderr)
 
     if not transcript_segments and not args.no_whisper:
-        backend, api_key = load_api_key(args.whisper)
-        if backend and api_key:
+        backend, api_key = resolve_backend(args.whisper)
+        if backend == "local":
+            try:
+                all_segments = transcribe_video_local(video_path, work / "audio.mp3")
+                transcript_segments = filter_range(all_segments, start_sec, end_sec) if focused else all_segments
+                transcript_text = format_transcript(transcript_segments)
+                transcript_source = f"whisper ({describe_local()})"
+            except SystemExit as exc:
+                print(f"[watch] local whisper failed: {exc}", file=sys.stderr)
+        elif backend and api_key:
             try:
                 all_segments, used_backend = transcribe_video(
                     video_path,
@@ -212,9 +224,9 @@ def main() -> int:
                 print(f"[watch] whisper fallback failed: {exc}", file=sys.stderr)
         else:
             hint = (
-                f"--whisper {args.whisper} was set but the matching API key is missing"
+                f"--whisper {args.whisper} was set but that backend is unavailable"
                 if args.whisper else
-                "no subtitles and no Whisper API key found"
+                "no subtitles, no local faster-whisper install, and no Whisper API key found"
             )
             setup_py = SCRIPT_DIR / "setup.py"
             print(
@@ -310,7 +322,7 @@ def main() -> int:
         print(
             "_No transcript available — proceed with frames only. "
             "Captions were missing and the Whisper fallback was unavailable "
-            "(no API key set, or `--no-whisper` was used). "
+            "(faster-whisper not installed, no API key set, or `--no-whisper` was used). "
             f"Run `python3 {setup_py}` to enable Whisper, then re-run._"
         )
 

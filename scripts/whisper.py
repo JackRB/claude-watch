@@ -82,6 +82,30 @@ def load_api_key(preferred: str | None = None) -> tuple[str, str] | tuple[None, 
     return None, None
 
 
+def resolve_backend(preferred: str | None = None) -> tuple[str | None, str | None]:
+    """Pick a transcription backend: (backend, api_key).
+
+    Local faster-whisper wins when it is installed — it is free, private, and
+    needs no key. The hosted backends are the fallback. `preferred` ("local",
+    "groq" or "openai") forces one backend and never falls through to another.
+    """
+    if preferred == "local":
+        from local_whisper import is_available
+
+        return ("local", None) if is_available() else (None, None)
+
+    if preferred is None:
+        try:
+            from local_whisper import is_available
+
+            if is_available():
+                return "local", None
+        except Exception:
+            pass
+
+    return load_api_key(preferred)
+
+
 def extract_audio(video_path: str, out_path: Path) -> Path:
     """Extract mono 16kHz 64kbps mp3 — ~480 kB/min, fits any Whisper limit."""
     if shutil.which("ffmpeg") is None:
