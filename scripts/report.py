@@ -6,11 +6,9 @@ by this script. Narrative sections (TL;DR, entities, concepts, etc.) are
 emitted as `<!-- pending Claude fill: <hint> -->` markers so Claude (the
 orchestrator) knows exactly what to write before offering ingest.
 
-The schema is dictated by what an Obsidian-style Ingest op (see
-`$VAULT_DIR/CLAUDE.md` if the user has one) needs to extract:
-  - Entities (people, companies, tools) → wiki/entities/*
-  - Concepts (frameworks, ideas) → wiki/concepts/*
-  - Source page with TL;DR and citations → wiki/sources/*
+The report is filed as a source note in the vault and ingested by the vault's
+own Ingest op (`$VAULT_DIR/CLAUDE.md`): entities and concepts become Title Case
+[[wikilinks]], not separate pages.
 """
 from __future__ import annotations
 
@@ -138,7 +136,7 @@ def write_report(
 
     lines.append("## Entities mentioned")
     lines.append("")
-    lines.append("- People: " + _pending("comma-separated, [[wikilink]]-ready"))
+    lines.append("- People: " + _pending("comma-separated, Title Case [[wikilinks]]"))
     lines.append("- Companies: " + _pending("comma-separated"))
     lines.append("- Tools / products: " + _pending("comma-separated"))
     lines.append("- Places: " + _pending("comma-separated, or omit if none"))
@@ -148,7 +146,7 @@ def write_report(
     lines.append("")
     lines.append(_pending(
         "List of concept: one-line gist. Frameworks, mental models, named "
-        "patterns. These map to wiki/concepts/ pages."
+        "patterns, as Title Case [[wikilinks]]."
     ))
     lines.append("")
 
