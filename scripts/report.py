@@ -60,11 +60,13 @@ def write_report(
     lines.append("---")
     lines.append(f"source: {source}")
     lines.append(f"title: {title}")
+    lines.append("type: watch-report")
     lines.append(f"duration: {_fmt_time(duration_seconds)}")
     lines.append(f"watched_at: {watched_at.isoformat()}")
     lines.append(f"intent: {intent or '(none)'}")
     lines.append(f"hero_frames: {_yaml_list(hero_names)}")
     lines.append(f"transcript_source: {transcript_source or 'none'}")
+    lines.append(f"date: {watched_at.date().isoformat()}")
     lines.append("---")
     lines.append("")
 
