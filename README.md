@@ -67,7 +67,7 @@ Flags for `scripts/watch.py`:
 | `--resolution W` | Frame width (default 512; 1024 to read on-screen text) |
 | `--fps F` | Override auto-fps (capped at 2; disables scene-change sampling) |
 | `--whisper local\|groq\|openai` | Force a transcription backend |
-| `--no-whisper` · `--no-hook-microscope` · `--no-scene-change` | Turn a stage off |
+| `--no-whisper` · `--no-hook-microscope` · `--no-scene-change` · `--no-dedup` | Turn a stage off |
 | `--out-dir DIR` | Keep working files somewhere specific |
 
 ## Limits

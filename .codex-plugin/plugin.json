@@ -1,6 +1,6 @@
 {
   "name": "watch",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Let Claude (or Codex) watch a video — scene-change frames + transcript + structured report, with a 0-10s hook microscope and Obsidian vault filing.",
   "repository": "https://github.com/JackRB/claude-watch",
   "author": "Jack (fork of taoufik)",

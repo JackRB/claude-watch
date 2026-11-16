@@ -9,13 +9,22 @@ zooming in for detail).
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import subprocess
 import sys
+from functools import lru_cache
 from pathlib import Path
 
 
 MAX_FPS = 2.0
+# Frame dedup: downscale each frame to a DEDUP_THUMB-square RGB thumbnail and
+# treat two frames as near-identical when their mean per-channel difference
+# (0-255) is at or below DEDUP_THRESHOLD. Catches held slides and static screen
+# recordings; subtle text changes can slip under it (use --no-dedup).
+# Ported from bradautomates/claude-video v0.2.0/v0.3.0.
+DEDUP_THUMB = 16
+DEDUP_THRESHOLD = 2.0
 
 
 def _clamp_fps(fps: float, duration_seconds: float, max_frames: int) -> tuple[float, int]:
@@ -89,6 +98,31 @@ def get_metadata(video_path: str) -> dict:
         "size_bytes": int(fmt.get("size") or 0),
         "has_audio": audio_stream is not None,
     }
+
+
+@lru_cache(maxsize=4)
+def _sync_option(executable: str) -> tuple[str, str]:
+    """Pick the variable-frame-rate flag this ffmpeg supports.
+
+    `-vsync` is deprecated in favor of `-fps_mode`; FFmpeg 9 lists the latter
+    with a stream specifier (`-fps_mode[:<stream_spec>]`). Falls back to
+    `-vsync` if the help text can't be read.
+    """
+    try:
+        result = subprocess.run(
+            [executable, "-hide_banner", "-h", "full"],
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30,
+        )
+        help_text = (result.stdout or "") + (result.stderr or "")
+    except (OSError, subprocess.SubprocessError):
+        help_text = ""
+    if re.search(r"(?m)^\s*-fps_mode\b", help_text):
+        return "-fps_mode", "vfr"
+    return "-vsync", "vfr"
+
+
+def sync_args() -> list[str]:
+    return list(_sync_option(shutil.which("ffmpeg") or "ffmpeg"))
 
 
 def auto_fps(duration_seconds: float, max_frames: int = 100) -> tuple[float, int]:
@@ -230,7 +264,7 @@ def extract_scene_change(
     cmd += [
         "-i", str(Path(video_path).resolve()),
         "-vf", vf,
-        "-vsync", "vfr",
+        *sync_args(),
         "-frames:v", str(max_frames),
         "-q:v", "4",
         output_pattern,
@@ -289,6 +323,81 @@ def extract_scene_change(
         }
         for i, p in enumerate(frames)
     ]
+
+
+def _frame_delta(a: bytes, b: bytes) -> float:
+    """Mean absolute per-channel difference (0-255) between two RGB thumbnails.
+    Mismatched lengths count as maximally different."""
+    if not a or len(a) != len(b):
+        return float("inf")
+    return sum(abs(x - y) for x, y in zip(a, b)) / len(a)
+
+
+def _thumb_frames(paths: list[Path]) -> list[bytes]:
+    """Decode every frame to a tiny RGB thumbnail in one ffmpeg pass.
+
+    Fail-open: any ffmpeg error, unexpected filename, or byte-count mismatch
+    returns [] so the caller skips dedup instead of breaking extraction.
+    """
+    if not paths or shutil.which("ffmpeg") is None:
+        return []
+    m = re.match(r"(.*?)(\d+)(\.[A-Za-z0-9]+)$", paths[0].name)
+    if m is None:
+        return []
+    prefix, digits, ext = m.groups()
+    pattern = str(paths[0].parent.resolve() / f"{prefix}%0{len(digits)}d{ext}")
+    cmd = [
+        "ffmpeg", "-hide_banner", "-loglevel", "error",
+        "-start_number", str(int(digits)),
+        "-i", pattern,
+        "-vf", f"scale={DEDUP_THUMB}:{DEDUP_THUMB},format=rgb24",
+        "-f", "rawvideo", "-",
+    ]
+    try:
+        result = subprocess.run(cmd, capture_output=True)
+    except OSError:
+        return []
+    size = DEDUP_THUMB * DEDUP_THUMB * 3
+    if result.returncode != 0 or len(result.stdout) != size * len(paths):
+        return []
+    return [result.stdout[i * size:(i + 1) * size] for i in range(len(paths))]
+
+
+def dedupe_by_deltas(
+    frames: list[dict], thumbs: list[bytes], threshold: float = DEDUP_THRESHOLD,
+) -> tuple[list[dict], int]:
+    """Drop frames within `threshold` of the last *kept* frame.
+
+    Deletes dropped JPEGs and reindexes survivors. Returns (kept, dropped_count);
+    unchanged when thumbs don't line up 1:1 with frames.
+    """
+    if len(frames) <= 1 or len(thumbs) != len(frames):
+        return frames, 0
+    kept = [frames[0]]
+    last = thumbs[0]
+    dropped: list[dict] = []
+    for frame, thumb in zip(frames[1:], thumbs[1:]):
+        if _frame_delta(thumb, last) <= threshold:
+            dropped.append(frame)
+        else:
+            kept.append(frame)
+            last = thumb
+    for frame in dropped:
+        try:
+            Path(frame["path"]).unlink()
+        except OSError:
+            pass
+    for i, frame in enumerate(kept):
+        frame["index"] = i
+    return kept, len(dropped)
+
+
+def dedupe_frames(frames: list[dict], threshold: float = DEDUP_THRESHOLD) -> tuple[list[dict], int]:
+    """Remove near-duplicate frames (held slides, static shots) in place on disk."""
+    if len(frames) <= 1:
+        return frames, 0
+    thumbs = _thumb_frames([Path(f["path"]) for f in frames])
+    return dedupe_by_deltas(frames, thumbs, threshold)
 
 
 def select_hero_frames(

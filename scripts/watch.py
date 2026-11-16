@@ -29,7 +29,7 @@ sys.path.insert(0, str(SCRIPT_DIR))
 
 from download import download, is_url  # noqa: E402
 from frames import (  # noqa: E402
-    MAX_FPS, auto_fps, auto_fps_focus, extract, extract_scene_change,
+    MAX_FPS, auto_fps, auto_fps_focus, dedupe_frames, extract, extract_scene_change,
     format_time, get_metadata, parse_time, select_hero_frames,
 )
 from hook import analyse_hook  # noqa: E402
@@ -76,6 +76,11 @@ def main() -> int:
         "--no-scene-change",
         action="store_true",
         help="Force uniform frame sampling (skip scene-change detection).",
+    )
+    ap.add_argument(
+        "--no-dedup",
+        action="store_true",
+        help="Keep near-identical frames (default drops held slides / static stretches).",
     )
     ap.add_argument(
         "--no-hook-microscope",
@@ -171,6 +176,14 @@ def main() -> int:
         video_duration=effective_duration,
         motion_scores=None,
     )
+
+    # Dedup after pacing so cut counts reflect every detected shot, while the
+    # frames Claude reads skip held slides and static stretches.
+    deduped_count = 0
+    if not args.no_dedup:
+        frames, deduped_count = dedupe_frames(frames)
+        if deduped_count:
+            print(f"[watch] dropped {deduped_count} near-duplicate frames", file=sys.stderr)
 
     # Hook microscope: dense pass over [0, 10s] when not in focused mode.
     if (not args.no_hook_microscope) and (not focused) and full_duration >= 30.0:
@@ -269,7 +282,11 @@ def main() -> int:
     if meta.get("width") and meta.get("height"):
         print(f"- **Resolution:** {meta['width']}x{meta['height']} ({meta.get('codec') or 'unknown codec'})")
     mode = "focused" if focused else "full"
-    print(f"- **Frames:** {len(frames)} @ {fps:.3f} fps, {mode} mode (budget {target}, max {max_frames})")
+    dedup_note = f", {deduped_count} near-duplicates dropped" if deduped_count else ""
+    print(
+        f"- **Frames:** {len(frames)} @ {fps:.3f} fps, {mode} mode "
+        f"(budget {target}, max {max_frames}{dedup_note})"
+    )
     print(f"- **Frame size:** {args.resolution}px wide")
     if transcript_segments:
         in_range = " in range" if focused else ""

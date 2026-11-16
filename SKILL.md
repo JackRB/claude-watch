@@ -47,7 +47,7 @@ python "${CLAUDE_SKILL_DIR}/scripts/watch.py" "<source>" --intent "<intent>"
 | `--resolution W` | Frame width, default 512. 1024 only to read on-screen text (~4× the tokens). |
 | `--fps F` | Override auto-fps; capped at 2; disables scene-change sampling |
 | `--whisper local\|groq\|openai` | Force a backend |
-| `--no-whisper` · `--no-hook-microscope` · `--no-scene-change` | Turn a stage off |
+| `--no-whisper` · `--no-hook-microscope` · `--no-scene-change` · `--no-dedup` | Turn a stage off |
 | `--out-dir DIR` | Keep working files somewhere specific |
 
 Frame budget is automatic: at most 100 frames and 2 fps. Accuracy is best under 10 minutes; past that the script warns, and a focused re-run usually beats a sparse scan. 80 frames at 512 px is roughly 50–80k tokens.

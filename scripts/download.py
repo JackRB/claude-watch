@@ -7,6 +7,7 @@ transcribe.py can parse them without needing Whisper.
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -59,6 +60,23 @@ def _pick_video(out_dir: Path) -> Path | None:
     return None
 
 
+def failure_hint(stderr: str) -> str:
+    """One actionable next step for a failed yt-dlp run (from upstream v0.3.0)."""
+    lower = stderr.lower()
+    if any(s in lower for s in ("sign in", "login required", "authentication required", "not a bot")):
+        return "Hint: this source needs authentication; pass cookies to yt-dlp if you have access."
+    if "429" in lower or "too many requests" in lower:
+        return "Hint: the site is rate limiting; wait before retrying."
+    if re.search(r"\b403\b", lower) or "forbidden" in lower:
+        # Sites routinely break older yt-dlp releases with 403s.
+        return (
+            f"Hint: HTTP 403 usually means yt-dlp is out of date. Update it "
+            f"(`{sys.executable} -m pip install -U yt-dlp`, or `winget upgrade yt-dlp` / "
+            "`brew upgrade yt-dlp` for those installs) and retry once."
+        )
+    return "Hint: check the yt-dlp error above; updating yt-dlp fixes most site breakage."
+
+
 def download_url(url: str, out_dir: Path) -> dict:
     if shutil.which("yt-dlp") is None:
         raise SystemExit("yt-dlp is not installed. Install with: brew install yt-dlp")
@@ -86,11 +104,18 @@ def download_url(url: str, out_dir: Path) -> dict:
 
     # yt-dlp may exit non-zero if a subtitle variant fails (e.g. 429) even when
     # the video itself downloaded fine. Treat "video file present" as success.
-    result = subprocess.run(cmd, stdout=sys.stderr, stderr=sys.stderr)
+    # Progress (stdout) streams through; stderr is captured so a failure can be diagnosed.
+    result = subprocess.run(
+        cmd, stdout=sys.stderr, stderr=subprocess.PIPE,
+        text=True, encoding="utf-8", errors="replace",
+    )
+    if result.stderr:
+        sys.stderr.write(result.stderr)
     video = _pick_video(out_dir)
     if video is None:
         raise SystemExit(
-            f"yt-dlp did not produce a video file in {out_dir} (exit {result.returncode})"
+            f"yt-dlp did not produce a video file in {out_dir} (exit {result.returncode}).\n"
+            + failure_hint(result.stderr or "")
         )
 
     subtitle = _pick_subtitle(out_dir)

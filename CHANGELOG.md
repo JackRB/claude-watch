@@ -2,6 +2,22 @@
 
 All notable changes to `/watch` are documented here.
 
+## [0.3.1] — 2026-11-16 (JackRB fork)
+
+Fixes ported from upstream [bradautomates/claude-video](https://github.com/bradautomates/claude-video) v0.2.0–v0.3.2, adapted to this fork's flat `scripts/` layout.
+
+### Added
+- Frame dedup (default on, `--no-dedup` to keep all). Frames within a mean 2/255 of the last kept frame (16×16 RGB thumbnail) are dropped after pacing is computed, so cut counts stay exact. The **Frames** line reports how many were dropped.
+- Whisper auto-chunking for Groq/OpenAI: audio over 24 MB (~50 min) is split into even chunks, timestamps are shifted back, and one failed chunk no longer loses the transcript. Local faster-whisper is unaffected.
+- yt-dlp failure hints: a 403 says to update yt-dlp and retry once; 429 and sign-in errors get their own hint.
+
+### Fixed
+- ffmpeg sync flag is detected: `-fps_mode vfr` when advertised (including FFmpeg 9's `-fps_mode[:<stream_spec>]` help format), else `-vsync vfr`.
+- WebVTT parsing: optional hours, BOM, HTML entities, NOTE/STYLE/REGION blocks, and cues missing a blank separator. Rolling-duplicate collapse now needs touching or overlapping cues with the same settings, so repeated speech after a gap survives.
+
+### Not ported
+- Gemini engine, WhisperX/uv, `--detail` modes, `--timestamps`, caption-language selection, and the `skills/watch/` restructure. The fork has local faster-whisper and vault filing instead.
+
 ## [0.3.0] — 2026-11-16 (JackRB fork)
 
 ### Added

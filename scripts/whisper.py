@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import io
 import json
+import math
 import mimetypes
 import os
 import shutil
@@ -30,6 +31,84 @@ GROQ_MODEL = "whisper-large-v3"
 
 OPENAI_ENDPOINT = "https://api.openai.com/v1/audio/transcriptions"
 OPENAI_MODEL = "whisper-1"
+
+# Groq's free tier and OpenAI whisper-1 cap uploads at 25 MB. Target a margin
+# under that so multipart framing never pushes a chunk over. At 64 kbps mono
+# that is ~50 minutes of audio per upload; longer audio is split into chunks.
+# Ported from bradautomates/claude-video v0.2.0/v0.3.0.
+MAX_UPLOAD_BYTES = 24_000_000
+
+
+def plan_chunks(
+    total_seconds: float, total_bytes: int, max_bytes: int = MAX_UPLOAD_BYTES,
+) -> list[tuple[float, float]]:
+    """Split a duration into contiguous (offset, duration) chunks under max_bytes.
+
+    Constant-bitrate mp3 size scales with duration, so an even time split gives
+    evenly sized chunks. One full-length chunk when the audio already fits.
+    """
+    if total_bytes <= max_bytes:
+        return [(0.0, total_seconds)]
+    if total_seconds <= 0:
+        raise SystemExit("Cannot split oversized audio with unknown duration")
+    n = math.ceil(total_bytes / max_bytes)
+    step = total_seconds / n
+    plan = []
+    for i in range(n):
+        offset = i * step
+        duration = (total_seconds - offset) if i == n - 1 else step
+        plan.append((round(offset, 3), round(duration, 3)))
+    return plan
+
+
+def split_audio(full_audio: Path, work_dir: Path, plan: list[tuple[float, float]]) -> list[tuple[Path, float]]:
+    """Slice audio into per-plan chunk files (stream copy). Returns (path, offset) pairs."""
+    work_dir.mkdir(parents=True, exist_ok=True)
+    chunks: list[tuple[Path, float]] = []
+    for index, (offset, duration) in enumerate(plan):
+        out_path = work_dir / f"chunk_{index:03d}.mp3"
+        cmd = [
+            "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+            "-ss", f"{offset:.3f}",
+            "-i", str(full_audio.resolve()),
+            "-t", f"{duration:.3f}",
+            "-c", "copy",
+            str(out_path.resolve()),
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
+        if result.returncode != 0 or not out_path.exists() or out_path.stat().st_size == 0:
+            raise SystemExit(f"ffmpeg failed to split audio chunk {index + 1}: {result.stderr.strip()}")
+        chunks.append((out_path, offset))
+    return chunks
+
+
+def shift_segments(segments: list[dict], offset_seconds: float) -> list[dict]:
+    """Shift a chunk's 0-based segment times back into source time."""
+    if offset_seconds == 0:
+        return segments
+    return [
+        {**seg, "start": round(seg["start"] + offset_seconds, 2), "end": round(seg["end"] + offset_seconds, 2)}
+        for seg in segments
+    ]
+
+
+def transcribe_chunks(chunks: list[tuple[Path, float]], transcribe_one) -> list[dict]:
+    """Transcribe each chunk and stitch the results. A failed chunk is logged and
+    skipped; raises only if every chunk fails."""
+    segments: list[dict] = []
+    failures = 0
+    for index, (path, offset) in enumerate(chunks):
+        try:
+            chunk_segments = transcribe_one(path)
+        except SystemExit as exc:
+            failures += 1
+            print(f"[watch] chunk {index + 1}/{len(chunks)} failed — skipping ({exc})", file=sys.stderr)
+            continue
+        segments.extend(shift_segments(chunk_segments, offset))
+        print(f"[watch] chunk {index + 1}/{len(chunks)} → {len(chunk_segments)} segments", file=sys.stderr)
+    if failures == len(chunks):
+        raise SystemExit("Whisper failed on every audio chunk")
+    return segments
 
 
 def load_api_key(preferred: str | None = None) -> tuple[str, str] | tuple[None, None]:
@@ -321,17 +400,35 @@ def transcribe_video(
 
     print(f"[watch] extracting audio for Whisper ({backend})…", file=sys.stderr)
     audio_path = extract_audio(video_path, audio_out)
-    size_kb = audio_path.stat().st_size / 1024
-    print(f"[watch] audio: {size_kb:.0f} kB — uploading to {backend} Whisper…", file=sys.stderr)
+    audio_bytes = audio_path.stat().st_size
 
     if backend == "groq":
-        response = _post_whisper(GROQ_ENDPOINT, api_key, GROQ_MODEL, audio_path)
+        endpoint, model = GROQ_ENDPOINT, GROQ_MODEL
     elif backend == "openai":
-        response = _post_whisper(OPENAI_ENDPOINT, api_key, OPENAI_MODEL, audio_path)
+        endpoint, model = OPENAI_ENDPOINT, OPENAI_MODEL
     else:
         raise SystemExit(f"Unknown whisper backend: {backend}")
 
-    segments = _segments_from_response(response)
+    def transcribe_one(path: Path) -> list[dict]:
+        return _segments_from_response(_post_whisper(endpoint, api_key, model, path))
+
+    if audio_bytes <= MAX_UPLOAD_BYTES:
+        print(f"[watch] audio: {audio_bytes / 1024:.0f} kB — uploading to {backend} Whisper…", file=sys.stderr)
+        segments = transcribe_one(audio_path)
+    else:
+        from frames import get_metadata
+        duration = get_metadata(str(audio_path))["duration_seconds"]
+        plan = plan_chunks(duration, audio_bytes, MAX_UPLOAD_BYTES - 64_000)
+        print(
+            f"[watch] audio: {audio_bytes / 1_000_000:.0f} MB exceeds the upload cap — "
+            f"splitting into {len(plan)} chunks…",
+            file=sys.stderr,
+        )
+        chunks = split_audio(audio_path, audio_out.parent / "chunks", plan)
+        if any(path.stat().st_size > MAX_UPLOAD_BYTES for path, _ in chunks):
+            raise SystemExit("A split audio chunk exceeds the upload cap; nothing was uploaded.")
+        segments = transcribe_chunks(chunks, transcribe_one)
+
     if not segments:
         raise SystemExit("Whisper returned no transcript segments")
 
