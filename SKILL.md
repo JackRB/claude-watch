@@ -2,7 +2,7 @@
 name: watch
 description: Watch a video (URL or local path) like an editor. Extracts scene-change frames, pacing metrics (cuts/min, shot length), and a dense 0-10s hook microscope; pulls transcript from captions or Whisper. Files an analysis report in the Obsidian vault next to the project it's about, and offers to ingest it — tied to *why* the user watched it.
 argument-hint: "<video-url-or-path> [why you're watching it]"
-allowed-tools: Bash, Read, AskUserQuestion
+allowed-tools: Bash, Read, Edit, Write, AskUserQuestion
 homepage: https://github.com/JackRB/claude-watch
 repository: https://github.com/JackRB/claude-watch
 author: taoufik (upstream), Jack (fork)
