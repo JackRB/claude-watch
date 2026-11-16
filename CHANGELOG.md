@@ -2,6 +2,22 @@
 
 All notable changes to `/watch` are documented here.
 
+## [0.3.0] — 2026-11-16 (JackRB fork)
+
+### Added
+- Local transcription with `faster-whisper` (`scripts/local_whisper.py`), tried after native captions and before Groq/OpenAI. No key, no upload. `WATCH_LOCAL_MODEL`, `WATCH_LOCAL_DEVICE`.
+- Vault filing: reports go to `Projects/<Project>/Video Analysis/<slug>/` as `<Title> — watch report.md`, with `type: watch-report` frontmatter, then an ingest offer.
+
+### Changed
+- `SKILL.md` simplified to the procedure; the vault defaults to `~/My Drive/Obsidian/Jack` when `WATCH_VAULT_DIR` is unset.
+- `allowed-tools` adds Edit and Write, which the fill and filing steps use.
+- The SessionStart hook runs `setup.py --check` and is silent when it passes, so an install with local Whisper no longer gets an API-key hint each session. The hook path is quoted.
+- Setup hints name the running interpreter instead of `python3`, which is the Microsoft Store stub on Windows.
+- README, AUTHORS and plugin metadata describe this fork.
+
+### Fixed
+- UTF-8 stdout/stderr on Windows consoles.
+
 ## [0.2.0] — 2026-05-25
 
 Based on [bradautomates/claude-video](https://github.com/bradautomates/claude-video) v0.1.3 by Bradley Bonanno (MIT). Its pipeline (yt-dlp + ffmpeg + Whisper) is preserved; everything below is additive.

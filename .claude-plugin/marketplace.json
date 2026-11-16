@@ -1,21 +1,21 @@
 {
   "name": "claude-watch",
   "metadata": {
-    "description": "Give Claude a video input. /watch downloads, extracts scene-change frames, microscopes the 0-10s hook, transcribes, and optionally auto-saves to your Obsidian vault."
+    "description": "Give Claude a video input. /watch downloads, extracts scene-change frames, microscopes the 0-10s hook, transcribes, and files a report in your Obsidian vault."
   },
   "owner": {
-    "name": "taoufik"
+    "name": "Jack"
   },
   "plugins": [
     {
       "name": "watch",
-      "description": "Watch a video (URL or local path). Downloads with yt-dlp, extracts scene-change frames with ffmpeg, runs a 0-10s hook microscope, transcribes via captions or Whisper, emits a structured report.md, optional Obsidian auto-save.",
+      "description": "Watch a video (URL or local path). Downloads with yt-dlp, extracts scene-change frames with ffmpeg, runs a 0-10s hook microscope, transcribes via captions, local Whisper or a Whisper API, emits a structured report.md, Obsidian vault filing.",
       "author": {
-        "name": "taoufik"
+        "name": "Jack (fork of taoufik)"
       },
       "source": "./",
       "category": "productivity",
-      "homepage": "https://github.com/taoufik123-collab/claude-watch"
+      "homepage": "https://github.com/JackRB/claude-watch"
     }
   ]
 }

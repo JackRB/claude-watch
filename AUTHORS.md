@@ -14,3 +14,9 @@ the MIT license, © 2026 Bradley Bonanno.
 
 Scene-change frame extraction, the 0-10s hook microscope, the structured `report.md`, and
 optional Obsidian auto-save, on top of Bradley's pipeline.
+
+## This fork — JackRB/claude-watch
+
+**Jack** — [JackRB](https://github.com/JackRB)
+
+Local `faster-whisper` transcription, vault filing by project, and Windows fixes.

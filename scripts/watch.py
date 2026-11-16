@@ -230,7 +230,7 @@ def main() -> int:
             )
             setup_py = SCRIPT_DIR / "setup.py"
             print(
-                f"[watch] {hint} — run `python3 {setup_py}` to enable the Whisper fallback",
+                f"[watch] {hint} — run `{sys.executable} {setup_py}` to enable the Whisper fallback",
                 file=sys.stderr,
             )
 
@@ -323,7 +323,7 @@ def main() -> int:
             "_No transcript available — proceed with frames only. "
             "Captions were missing and the Whisper fallback was unavailable "
             "(faster-whisper not installed, no API key set, or `--no-whisper` was used). "
-            f"Run `python3 {setup_py}` to enable Whisper, then re-run._"
+            f"Run `{sys.executable} {setup_py}` to enable Whisper, then re-run._"
         )
 
     print()

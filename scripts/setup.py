@@ -264,7 +264,7 @@ def cmd_check() -> int:
     installer = Path(__file__).resolve()
     sys.stderr.write(
         f"[watch] setup incomplete ({'; '.join(parts)}). "
-        f"Run: python3 {installer}\n"
+        f"Run: {sys.executable} {installer}\n"
     )
     sys.stderr.flush()
 

@@ -316,7 +316,7 @@ def transcribe_video(
         raise SystemExit(
             "No Whisper API key available. Set GROQ_API_KEY (preferred) or OPENAI_API_KEY "
             "in the environment or in ~/.config/watch/.env. "
-            f"Run `python3 {setup_py}` to configure."
+            f"Run `{sys.executable} {setup_py}` to configure."
         )
 
     print(f"[watch] extracting audio for Whisper ({backend})…", file=sys.stderr)
