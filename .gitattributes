@@ -26,3 +26,6 @@ examples/      export-ignore
 # Build config itself
 .gitignore      export-ignore
 .gitattributes  export-ignore
+
+# Shell scripts run under bash; CRLF breaks them.
+*.sh text eol=lf
